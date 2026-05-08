@@ -8,6 +8,7 @@ from plexapi.server import PlexServer
 from bs4 import BeautifulSoup
 
 
+# --- FUNCTIONS ---
 def add_label_to_card(card_id, label_id):
     url = f"https://api.trello.com/1/cards/{card_id}/idLabels"
     query = {'key': TRELLO_KEY, 'token': TRELLO_TOKEN, 'value': label_id}
@@ -61,8 +62,15 @@ def find_movie_title_tmdb(query):
         'page': 1
     }
     response = requests.get(url, params=params)
-    print(response.text)
-    data = response.json()
+    #print(response.text)
+    if response.status_code != 200:
+        print(f"TMDb API error: {response.status_code}")
+        return None
+    try:
+        data = response.json()
+    except Exception as e:
+        print(f"Error decoding TMDb response: {e}")
+        return None
     results = data.get('results', [])
     if not results:
         return None
@@ -135,6 +143,20 @@ def fetch_tmdb_top_100_movies():
         data = response.json()
         movies.extend([m["title"] for m in data.get("results", [])])
     return movies[:100]
+
+def add_unwatched_to_trello():
+    plex = PlexServer(PLEX_URL, PLEX_TOKEN)
+    # Movies
+    movies = plex.library.section('Movies').all()
+    for movie in movies:
+        if not movie.isWatched:
+            add_card_to_list(MOVIE_LIST_ID, movie.title, desc="Unwatched in Plex")
+    # TV Shows
+    shows = plex.library.section('TV Shows').all()
+    for show in shows:
+        unwatched_eps = sum(1 for season in show.seasons() for ep in season.episodes() if not ep.isWatched)
+        if unwatched_eps > 0:
+            add_card_to_list(TV_LIST_ID, show.title, desc="Unwatched in Plex")
 
 def fetch_tmdb_top_100_tv():
     url = "https://api.themoviedb.org/3/tv/top_rated"
@@ -227,7 +249,7 @@ def set_card_progress(card_id, field_id, percent):
 def add_card_to_list(list_id, title, desc=''):
     existing_cards = get_cards_in_list(list_id)
     if any(card['name'].strip().lower() == title.strip().lower() for card in existing_cards):
-        print(f"Card '{title}' already exists in list ID: {list_id}. Skipping.")
+        #print(f"Card '{title}' already exists in list ID: {list_id}. Skipping.")
         return
     url = f"https://api.trello.com/1/cards"
     query = {
@@ -238,7 +260,7 @@ def add_card_to_list(list_id, title, desc=''):
         'desc': desc
     }
     requests.post(url, params=query)
-    print(f"Added card: {title} to list ID: {list_id}")
+    #print(f"Added card: {title} to list ID: {list_id}")
 
 
 def process_imdb_top_100():
@@ -286,6 +308,41 @@ def update_episode_count_in_desc(desc, correct_count):
         desc += f"\nEpisodes: {correct_count}"
     return desc
 
+def extract_reviews_and_update_plex(card):
+    url = f"https://api.trello.com/1/cards/{card['id']}/actions"
+    query = {'key': TRELLO_KEY, 'token': TRELLO_TOKEN, 'filter': 'commentCard'}
+    response = requests.get(url, params=query)
+    actions = response.json()
+    m_score = None
+    c_score = None
+    for action in actions:
+        text = action.get('data', {}).get('text', '')
+        m_match = re.match(r"M:\s*([0-9]+(?:\.[0-9]+)?)", text)
+        c_match = re.match(r"C:\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if m_match:
+            m_score = float(m_match.group(1))
+        if c_match:
+            c_score = float(c_match.group(1))
+    if m_score is not None and c_score is not None:
+        avg = round((m_score + c_score) / 2, 2)
+        # Update Plex rating
+        plex = PlexServer(PLEX_URL, PLEX_TOKEN)
+        # Try to find the item in Movies or TV Shows
+        item = None
+        try:
+            movies = plex.library.section('Movies').search(title=card['name'])
+            if movies:
+                item = movies[0]
+            else:
+                shows = plex.library.section('TV Shows').search(title=card['name'])
+                if shows:
+                    item = shows[0]
+            if item:
+                item.userRating(plex.myPlexAccount(), avg)
+                print(f"Updated Plex rating for {card['name']} to {avg}")
+        except Exception as e:
+            print(f"Failed to update Plex rating for {card['name']}: {e}")
+
 def update_card_description(card_id, new_desc):
     url = f"https://api.trello.com/1/cards/{card_id}/desc"
     query = {'key': TRELLO_KEY, 'token': TRELLO_TOKEN, 'value': new_desc}
@@ -303,14 +360,31 @@ def scan_shows_daily():
                 print(f"Set progress for {card['name']}: {percent}%")
             else:
                 print(f"Could not set progress for {card['name']}")
+            extract_reviews_and_update_plex(card)
             time.sleep(0.5)
 
+def card_has_trailer(card):
+    # Check in description
+    desc = card.get('desc', '') or ''
+    if "youtube.com/watch" in desc or "youtu.be/" in desc:
+        return True
+    # Check in comments
+    url = f"https://api.trello.com/1/cards/{card['id']}/actions"
+    query = {'key': TRELLO_KEY, 'token': TRELLO_TOKEN, 'filter': 'commentCard'}
+    response = requests.get(url, params=query)
+    actions = response.json()
+    for action in actions:
+        text = action.get('data', {}).get('text', '')
+        if "youtube.com/watch" in text or "youtu.be/" in text:
+            return True
+    return False
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
     LISTS_TRELLO = [TV_LIST_ID, MOVIE_LIST_ID]  # You can add more list IDs here if needed
     limit = 100
-    process_imdb_top_100()
+    #process_imdb_top_100()
+    #add_unwatched_to_trello()
     for backlog in LISTS_TRELLO:
         cards = get_cards_in_list(backlog)
         for card in cards:
@@ -321,16 +395,16 @@ if __name__ == "__main__":
             if "IMDb Rating" in desc:
                 continue
             movie_name = card['name']
-            print(f"Processing: {movie_name}")
+            #print(f"Processing: {movie_name}")
 
                 # Get IMDb info and append to description
             imdb_info = get_imdb_info(movie_name)
             desc = clean_description(desc)
-            print(imdb_info)
+            #print(imdb_info)
             details = f"\n\nIMDb Info:\n"
             if imdb_info['episodes']:
                 correct_count = get_total_episodes(movie_name)
-                print(correct_count)
+                #print(correct_count)
                 if correct_count:
                     details += f"Episodes: {correct_count}\n"
             if imdb_info['imdb_rating']:
@@ -340,7 +414,7 @@ if __name__ == "__main__":
             new_desc = desc + details
             update_card_description(card['id'], new_desc)
             time.sleep(0.5)
-            if card_has_comments(card['id']) or card.get('desc', '').strip():
+            if card_has_trailer(card):
                 continue
             if backlog == TV_LIST_ID:
                 movie_name = movie_name + " season 1"
@@ -350,6 +424,6 @@ if __name__ == "__main__":
             limit -= 1
             if trailer_url:
                 add_comment_to_card(card['id'], f"Trailer: {trailer_url}")
-                print(f"Added trailer for {movie_name}")
+                #print(f"Added trailer for {movie_name}")
             else:
                 print(f"Trailer not found for {movie_name}")
