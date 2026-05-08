@@ -7,18 +7,7 @@ import wikipediaapi
 from plexapi.server import PlexServer
 from bs4 import BeautifulSoup
 
-# --- CONFIGURATION ---
-PLEX_URL = 'http://localhost:32400'  # Change to your Plex server URL
-PLEX_TOKEN = 'YOUR_PLEX_TOKEN'
-TRELLO_KEY = 'ce39e4f3700411fde949aac8516093e4'
-TRELLO_TOKEN = 'ATTAeaccedf67dd627a0906600d018b046917bf3b4f165933a953fe73b9a269bf339C68B359C'
-MOVIE_LIST_ID = '69e7adc5c4b6e6b3863cf383'
-YOUTUBE_API_KEY = 'AIzaSyCD8M_P9BxhUoZDjUiqo4JSQ3PA4YoyHVU'
-TV_LIST_ID = '6895379b6437c0e35b25375b'
-OMDB_API_KEY = 'd7a3c893'
-TMDB_API_KEY = '8d8c86607e72e3e99f9c0997523fcde7'
-SHOWS = ["688f9738315015fd2c58f589","688f973a300aa3496b3b3b8e","688f973dd36dd6585c3887f6","688f973f802ea2938a7668e1","688f974043a1ae04b5f1674b","688f974259ea60d2e066e898","688f9744dd0976156a2862a2","69a092b911a765776d1426e2"]
-# --- FUNCTIONS ---
+
 def add_label_to_card(card_id, label_id):
     url = f"https://api.trello.com/1/cards/{card_id}/idLabels"
     query = {'key': TRELLO_KEY, 'token': TRELLO_TOKEN, 'value': label_id}
